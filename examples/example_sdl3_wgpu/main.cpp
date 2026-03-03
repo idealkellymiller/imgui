@@ -40,8 +40,8 @@ static int                      wgpu_surface_width = 1280;
 static int                      wgpu_surface_height = 800;
 
 // Forward declarations
-static bool         InitWGPU(SDL_Window* window);
-static WGPUSurface  CreateWGPUSurface(const WGPUInstance& instance, SDL_Window* window);
+static bool InitWGPU(SDL_Window* window);
+WGPUSurface CreateWGPUSurface(const WGPUInstance& instance, SDL_Window* window);
 
 static void ResizeSurface(int width, int height)
 {
@@ -101,7 +101,7 @@ int main(int, char**)
     ImGui_ImplWGPU_Init(&init_info);
 
     // Load Fonts
-    // - If fonts are not explicitly loaded, Dear ImGui will call AddFontDefault() to select an embedded font: either AddFontDefaultVector() or AddFontDefaultBitmap().
+    // - If fonts are not explicitly loaded, Dear ImGui will select an embedded font: either AddFontDefaultVector() or AddFontDefaultBitmap().
     //   This selection is based on (style.FontSizeBase * style.FontScaleMain * style.FontScaleDpi) reaching a small threshold.
     // - You can load multiple fonts and use ImGui::PushFont()/PopFont() to select them.
     // - If a file cannot be loaded, AddFont functions will return a nullptr. Please handle those errors in your code (e.g. use an assertion, display an error and quit).
@@ -380,23 +380,29 @@ static WGPUAdapter RequestAdapter(WGPUInstance& instance)
 {
     WGPURequestAdapterOptions adapter_options = {};
 
-    WGPUAdapter local_adapter;
+    WGPUAdapter local_adapter = nullptr;
     WGPURequestAdapterCallbackInfo adapterCallbackInfo = {};
+    adapterCallbackInfo.mode = WGPUCallbackMode_WaitAnyOnly;
     adapterCallbackInfo.callback = handle_request_adapter;
     adapterCallbackInfo.userdata1 = &local_adapter;
 
-    wgpuInstanceRequestAdapter(instance, &adapter_options, adapterCallbackInfo);
+    WGPUFuture future = wgpuInstanceRequestAdapter(instance, &adapter_options, adapterCallbackInfo);
+    WGPUFutureWaitInfo waitInfo = { future, false };
+    wgpuInstanceWaitAny(instance, 1, &waitInfo, ~0ull);
     IM_ASSERT(local_adapter && "Error on Adapter request");
     return local_adapter;
 }
 
-static WGPUDevice RequestDevice(WGPUAdapter& adapter)
+static WGPUDevice RequestDevice(WGPUInstance& instance, WGPUAdapter& adapter)
 {
-    WGPUDevice local_device;
+    WGPUDevice local_device = nullptr;
     WGPURequestDeviceCallbackInfo deviceCallbackInfo = {};
+    deviceCallbackInfo.mode = WGPUCallbackMode_WaitAnyOnly;
     deviceCallbackInfo.callback = handle_request_device;
     deviceCallbackInfo.userdata1 = &local_device;
-    wgpuAdapterRequestDevice(adapter, nullptr, deviceCallbackInfo);
+    WGPUFuture future = wgpuAdapterRequestDevice(adapter, nullptr, deviceCallbackInfo);
+    WGPUFutureWaitInfo waitInfo = { future, false };
+    wgpuInstanceWaitAny(instance, 1, &waitInfo, ~0ull);
     IM_ASSERT(local_device && "Error on Device request");
     return local_device;
 }
@@ -445,7 +451,11 @@ static bool InitWGPU(SDL_Window* window)
 
     // WGPU backend: Adapter and Device acquisition, Surface creation
 #elif defined(IMGUI_IMPL_WEBGPU_BACKEND_WGPU)
-    wgpu_instance = wgpuCreateInstance(nullptr);
+    WGPUInstanceDescriptor instanceDesc = {};
+    WGPUInstanceFeatureName timedWaitAny = WGPUInstanceFeatureName_TimedWaitAny;
+    instanceDesc.requiredFeatureCount = 1;
+    instanceDesc.requiredFeatures = &timedWaitAny;
+    wgpu_instance = wgpuCreateInstance(&instanceDesc);
 
 #ifdef __EMSCRIPTEN__
     getAdapterAndDeviceViaJS();
@@ -472,7 +482,7 @@ static bool InitWGPU(SDL_Window* window)
     WGPUAdapter adapter = RequestAdapter(wgpu_instance);
     ImGui_ImplWGPU_DebugPrintAdapterInfo(adapter);
 
-    wgpu_device = RequestDevice(adapter);
+    wgpu_device = RequestDevice(wgpu_instance, adapter);
 
     // Create the surface.
     wgpu_surface = CreateWGPUSurface(wgpu_instance, window);
@@ -513,7 +523,7 @@ static bool InitWGPU(SDL_Window* window)
 #include <windows.h>
 #endif
 
-static WGPUSurface CreateWGPUSurface(const WGPUInstance& instance, SDL_Window* window)
+WGPUSurface CreateWGPUSurface(const WGPUInstance& instance, SDL_Window* window)
 {
     SDL_PropertiesID propertiesID = SDL_GetWindowProperties(window);
 
